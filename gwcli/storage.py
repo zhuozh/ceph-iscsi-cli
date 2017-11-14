@@ -58,7 +58,8 @@ class Disks(UIGroup):
         for child in children:
             self.remove_child(child)
 
-    def ui_command_create(self, pool=None, image=None, size=None, count=1):
+    def ui_command_create(self, pool=None, image=None, size=None, count=1,
+                          cmd_time_out=None):
         """
         Create a LUN and assign to the gateway(s).
 
@@ -83,6 +84,8 @@ class Disks(UIGroup):
                 create rbd.test 1g count=5
                 -> create 5 LUNs called test1..test5 each of 1GB in size
                    from the rbd pool
+        cmd_time_out ： Optional, integer(defaults to 30, i.e. TCMU_TIME_OUT),
+                value of TCMU command timeout.
 
         Notes.
         1) size does not support decimal representations
@@ -128,12 +131,14 @@ class Disks(UIGroup):
                 return
 
         self.logger.debug("CMD: /disks/ create pool={} "
-                          "image={} size={} count={}".format(pool,
+                    "image={} size={} count={} cmd_time_out={}".format(pool,
                                                              image,
                                                              size,
-                                                             count))
+                                                             count,
+                                                             cmd_time_out))
 
-        self.create_disk(pool=pool, image=image, size=size, count=count)
+        self.create_disk(pool=pool, image=image, size=size,
+                         count=count, cmd_time_out=cmd_time_out)
 
     def _valid_pool(self, pool=None):
         """
@@ -161,7 +166,7 @@ class Disks(UIGroup):
         return False
 
     def create_disk(self, pool=None, image=None, size=None, count=1,
-                    parent=None):
+                    cmd_time_out=None, parent=None):
 
         rc = 0
 
@@ -184,7 +189,8 @@ class Disks(UIGroup):
                                                               disk_key)
 
         api_vars = {'pool': pool, 'size': size.upper(), 'owner': local_gw,
-                    'count': count, 'mode': 'create'}
+                    'count': count, 'mode': 'create',
+                    'cmd_time_out': cmd_time_out}
 
         self.logger.debug("Issuing disk create request")
 
