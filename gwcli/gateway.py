@@ -209,23 +209,9 @@ class ISCSITarget(UIGroup):
         Create an iSCSI target. This target is defined across all gateway nodes,
         providing the client with a single 'image' for iscsi discovery.
 
-        Only ONE iSCSI target is supported, at this time.
         """
 
         self.logger.debug("CMD: /iscsi create {}".format(target_iqn))
-
-        defined_targets = [tgt.name for tgt in self.children]
-        if len(defined_targets) > 0:
-            self.logger.error("Only ONE iscsi target image is supported")
-            return
-
-        # We need LIO to be empty, so check there aren't any targets defined
-        local_lio = root.RTSRoot()
-        current_target_names = [tgt.wwn for tgt in local_lio.targets]
-        if current_target_names:
-            self.logger.error("Local LIO instance already has LIO configured "
-                              "with a target - unable to continue")
-            return
 
         # OK - this request is valid, but is the IQN usable?
         if not valid_iqn(target_iqn):
