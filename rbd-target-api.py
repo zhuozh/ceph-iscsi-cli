@@ -1474,33 +1474,33 @@ def pre_reqs_errors():
 
     dist, rel, dist_id = platform.linux_distribution(full_distribution_name=0)
 
-    if dist.lower() in valid_dists:
-        if rel not in valid_versions:
-            errors_found.append("OS version is unsupported")
-
-        # check rpm versions are OK
-        for rpm in required_rpms:
-            if not valid_rpm(rpm):
-                logger.error("RPM check for {} failed")
-                errors_found.append("{} rpm must be installed at >= "
-                                    "{}-{}".format(rpm['name'],
-                                                   rpm['version'],
-                                                   rpm['release']))
-    else:
-        errors_found.append("OS is unsupported")
-
-    # check the running kernel is OK (required kernel has patches to rbd.ko)
-    os_info = os.uname()
-    this_arch = os_info[-1]
-    this_kernel = os_info[2].replace(".{}".format(this_arch), '')
-    this_ver, this_rel = this_kernel.split('-')
-
-    # use labelCompare from the rpm module to handle the comparison
-    if labelCompare(('1', this_ver, this_rel), ('1', k_vers, k_rel)) < 0:
-        logger.error("Kernel version check failed")
-        errors_found.append("Kernel version too old - {}-{} "
-                            "or above needed".format(k_vers,
-                                                     k_rel))
+#    if dist.lower() in valid_dists:
+#        if rel not in valid_versions:
+#            errors_found.append("OS version is unsupported")
+#
+#        # check rpm versions are OK
+#        for rpm in required_rpms:
+#            if not valid_rpm(rpm):
+#                logger.error("RPM check for {} failed")
+#                errors_found.append("{} rpm must be installed at >= "
+#                                    "{}-{}".format(rpm['name'],
+#                                                   rpm['version'],
+#                                                   rpm['release']))
+#    else:
+#        errors_found.append("OS is unsupported")
+#
+#    # check the running kernel is OK (required kernel has patches to rbd.ko)
+#    os_info = os.uname()
+#    this_arch = os_info[-1]
+#    this_kernel = os_info[2].replace(".{}".format(this_arch), '')
+#    this_ver, this_rel = this_kernel.split('-')
+#
+#    # use labelCompare from the rpm module to handle the comparison
+#    if labelCompare(('1', this_ver, this_rel), ('1', k_vers, k_rel)) < 0:
+#        logger.error("Kernel version check failed")
+#        errors_found.append("Kernel version too old - {}-{} "
+#                            "or above needed".format(k_vers,
+#                                                     k_rel))
 
     return errors_found
 
