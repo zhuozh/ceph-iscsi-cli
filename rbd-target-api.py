@@ -72,10 +72,7 @@ def requires_restricted_auth(f):
 
         # First check that the source of the request is actually valid
         local_gw = ['127.0.0.1']
-        gw_names = [gw for gw in config.config['gateways']
-                    if isinstance(config.config['gateways'][gw], dict)]
-        gw_ips = [get_ip(gw_name) for gw_name in gw_names] + \
-                 local_gw + settings.config.trusted_ip_list
+        gw_ips = local_gw + settings.config.trusted_ip_list
 
         if request.remote_addr not in gw_ips:
             return jsonify(message="API access not available to "
