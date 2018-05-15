@@ -208,8 +208,9 @@ class Disks(UIGroup):
                 self.logger.error("invalid count format, must be an integer")
                 return
 
-        self.logger.debug("CMD: /disks/ create pool={} "
-                          "image={} size={} count={}".format(pool,
+        self.logger.debug("CMD: {}/disks/ create pool={} "
+                          "image={} size={} count={}".format(self.parent.target_iqn,
+                                                             pool,
                                                              image,
                                                              size,
                                                              count))
@@ -264,7 +265,7 @@ class Disks(UIGroup):
                                                               settings.config.api_port,
                                                               disk_key)
 
-        api_vars = {'pool': pool, 'size': size.upper(), 'owner': local_gw,
+        api_vars = {'target_iqn': self.parent.target_iqn, 'pool': pool, 'size': size.upper(), 'owner': local_gw,
                     'count': count, 'mode': 'create'}
 
         self.logger.debug("Issuing disk create request")
@@ -290,8 +291,9 @@ class Disks(UIGroup):
                             '{}'.format(self.http_mode,
                                         settings.config.api_port,
                                         disk_key))
+                api_vars = {'target_iqn': self.parent.target_iqn}
 
-                api = APIRequest(disk_api)
+                api = APIRequest(disk_api, data=api_vars)
                 api.get()
 
                 if api.response.status_code == 200:
@@ -306,7 +308,7 @@ class Disks(UIGroup):
                     raise GatewayAPIError("Unable to retrieve disk details "
                                           "for '{}' from the API".format(disk_key))
 
-            ceph_pools = self.parent.ceph.local_ceph.pools
+            ceph_pools = self.parent.parent.parent.ceph.local_ceph.pools
             ceph_pools.refresh()
 
         else:
@@ -352,7 +354,8 @@ class Disks(UIGroup):
         image_id: disk name (pool.image format)
         size: new size including unit suffix e.g. 300G
         """
-        self.logger.debug("CMD: /disks/ resize {} {}".format(image_id,
+
+        self.logger.debug("CMD: /disks/ resize {} {}".format(self.parent.target_iqn, image_id,
                                                              size))
         if image_id and size:
             if image_id in self.disk_lookup:
@@ -408,14 +411,14 @@ class Disks(UIGroup):
                               "configuration".format(image_id))
             return
 
-        self.logger.debug("CMD: /disks delete {}".format(image_id))
+        self.logger.debug("CMD: {}/disks delete {}".format(self.parent.target_iqn, image_id))
 
         self.logger.debug("Starting delete for rbd {}".format(image_id))
 
         local_gw = this_host()
         # other_gateways = get_other_gateways(self.parent.target.children)
 
-        api_vars = {'purge_host': local_gw}
+        api_vars = {'purge_host': local_gw, 'target_iqn': self.parent.target_iqn}
 
         disk_api = '{}://{}:{}/api/disk/{}'.format(self.http_mode,
                                                        local_gw,
@@ -438,7 +441,7 @@ class Disks(UIGroup):
                                                            self.logger)))
             return
 
-        ceph_pools = self.parent.ceph.local_ceph.pools
+        ceph_pools = self.parent.parent.parent.ceph.local_ceph.pools
         ceph_pools.refresh()
 
         self.logger.info('ok')
@@ -501,11 +504,12 @@ class Disk(UINode):
         UINode.__init__(self, image_id, parent)
 
         self.image_id = image_id
+        self.iqn = {}
         self.size = 0
         self.size_h = ''
         self.features = 0
         self.feature_list = []
-        self.ceph_cluster = self.parent.parent.ceph.local_ceph.name
+        self.ceph_cluster = self.parent.parent.parent.parent.ceph.local_ceph.name
 
         disk_map = self.parent.disk_info
         if image_id not in disk_map:
@@ -632,7 +636,7 @@ class Disk(UINode):
                                      settings.config.api_port,
                                      self.image_id))
 
-        api_vars = {'pool': self.pool, 'size': size_rqst,
+        api_vars = {'target_iqn':self.parent.parent.target_iqn, 'pool': self.pool, 'size': size_rqst,
                     'owner': local_gw, 'mode': 'resize'}
 
         self.logger.debug("Issuing resize request")
@@ -659,7 +663,7 @@ class Disk(UINode):
         use the object model to track back from the disk to the relevant pool
         in the local ceph cluster and update the commit stats
         """
-        root = self.parent.parent
+        root = self.parent.parent.parent.parent
         ceph_group = root.ceph
         cluster = ceph_group.local_ceph
         pool = cluster.pools.pool_lookup.get(self.pool)

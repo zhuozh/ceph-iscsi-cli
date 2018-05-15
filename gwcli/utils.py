@@ -85,7 +85,7 @@ def valid_iqn(iqn):
     return True
 
 
-def valid_gateway(gw_name, gw_ip, config):
+def valid_gateway(tgt_iqn, gw_name, gw_ip, config):
     """
     validate the request for a new gateway
     :param gw_name: (str) host (shortname) of the gateway
@@ -97,10 +97,10 @@ def valid_gateway(gw_name, gw_ip, config):
     http_mode = 'https' if settings.config.api_secure else "http"
 
     # if the gateway request already exists in the config, computer says "no"
-    if gw_name in config['gateways']:
+    if gw_name in config['targets'][tgt_iqn]['gateways']:
         return "Gateway name {} already defined".format(gw_name)
 
-    if gw_ip in config['gateways'].get('ip_list', []):
+    if gw_ip in config['targets'][tgt_iqn]['gateways'].get('ip_list', []):
         return "IP address already defined to the configuration"
 
     # validate the gateway name is resolvable
@@ -218,9 +218,9 @@ def valid_disk(**kwargs):
     :return: (str) either 'ok' or an error description
     """
 
-    mode_vars = {"create": ['pool', 'image', 'size', 'count'],
-                 "resize": ['pool', 'image', 'size'],
-                 "delete": ['pool', 'image']}
+    mode_vars = {"create": ['target_iqn', 'pool', 'image', 'size', 'count'],
+                 "resize": ['target_iqn', 'pool', 'image', 'size'],
+                 "delete": ['target_iqn', 'pool', 'image']}
 
     config = get_config()
     if not config:
@@ -240,6 +240,7 @@ def valid_disk(**kwargs):
         return "disk operation mode '{}' is invalid".format(mode)
 
     disk_key = "{}.{}".format(kwargs['pool'], kwargs['image'])
+    target_iqn = "{}".format(kwargs['target_iqn'])
 
     if mode in ['create', 'resize']:
 
@@ -264,12 +265,12 @@ def valid_disk(**kwargs):
             new_disks = set(['{}{}'.format(disk_key, ctr)
                              for ctr in range(1, limit)])
 
-        if any(new_disk in config['disks'] for new_disk in new_disks):
+        if any(new_disk in config['targets'][target_iqn]['disks'] for new_disk in new_disks):
             return ("at least one rbd image(s) with that name/prefix is "
                     "already defined")
 
-        gateways_defined = len([key for key in config['gateways']
-                               if isinstance(config['gateways'][key],
+        gateways_defined = len([key for key in config['targets'][target_iqn]['gateways']
+                               if isinstance(config['targets'][target_iqn]['gateways'][key],
                                              dict)])
         if gateways_defined < settings.config.minimum_gateways:
             return ("disks can not be added until at least {} gateways "
@@ -278,10 +279,10 @@ def valid_disk(**kwargs):
 
     if mode in ["resize", "delete"]:
         # disk must exist in the config
-        if disk_key not in config['disks']:
-            return ("rbd {}/{} is not defined to the "
+        if disk_key not in config['targets'][target_iqn]['disks']:
+            return ("rbd {}/{} is not defined to the {} "
                     "configuration".format(kwargs['pool'],
-                                           kwargs['image']))
+                                           kwargs['image'], kwargs['target_iqn']))
 
 
     if mode == 'resize':
@@ -297,8 +298,8 @@ def valid_disk(**kwargs):
 
         # disk must *not* be allocated to a client in the config
         allocation_list = []
-        for client_iqn in config['clients']:
-            client_metadata = config['clients'][client_iqn]
+        for client_iqn in config['targets'][target_iqn]['clients']:
+            client_metadata = config['targets'][target_iqn]['clients'][client_iqn]
             if disk_key in client_metadata['luns']:
                 allocation_list.append(client_iqn)
 
@@ -386,6 +387,7 @@ def valid_client(**kwargs):
 
     mode = kwargs['mode']
     client_iqn = kwargs['client_iqn']
+    target_iqn = kwargs['target_iqn']
     config = get_config()
     if not config:
         return "Unable to query the local API for the current config"
@@ -396,13 +398,13 @@ def valid_client(**kwargs):
             return ("Invalid IQN name for iSCSI")
 
         # iqn must not already exist
-        if client_iqn in config['clients']:
+        if client_iqn in config['targets'][target_iqn]['clients']:
             return ("A client with the name '{}' is "
                     "already defined".format(client_iqn))
 
         # Creates can only be done with a minimum number of gw's in place
-        num_gws = len([gw_name for gw_name in config['gateways']
-                       if isinstance(config['gateways'][gw_name], dict)])
+        num_gws = len([gw_name for gw_name in config['targets'][target_iqn]['gateways']
+                       if isinstance(config['targets'][target_iqn]['gateways'][gw_name], dict)])
         if num_gws < settings.config.minimum_gateways:
             return ("Clients can not be defined until a HA configuration "
                     "has been defined "
@@ -414,11 +416,11 @@ def valid_client(**kwargs):
     elif mode == 'delete':
 
         # client must exist in the configuration
-        if client_iqn not in config['clients']:
+        if client_iqn not in config['targets'][target_iqn]['clients']:
             return ("{} is not defined yet - nothing to "
                     "delete".format(client_iqn))
 
-        this_client = config['clients'].get(client_iqn)
+        this_client = config['targets'][target_iqn]['clients'].get(client_iqn)
         if this_client.get('group_name', None):
             return ("Unable to delete '{}' - it belongs to "
                     "group {}".format(client_iqn,
@@ -442,7 +444,7 @@ def valid_client(**kwargs):
     elif mode == 'auth':
         chap = kwargs['chap']
         # client iqn must exist
-        if client_iqn not in config['clients']:
+        if client_iqn not in config['targets'][target_iqn]['clients']:
             return ("Client '{}' does not exist".format(client_iqn))
 
         # must provide chap as either '' or a user/password string
@@ -459,7 +461,7 @@ def valid_client(**kwargs):
 
     elif mode == 'disk':
 
-        this_client = config['clients'].get(client_iqn)
+        this_client = config['targets'][target_iqn]['clients'].get(client_iqn)
         if this_client.get('group_name', None):
             return ("Unable to manage disks for '{}' - it belongs to "
                     "group {}".format(client_iqn,
@@ -470,8 +472,8 @@ def valid_client(**kwargs):
                     " a comma separated str of rbd images (pool.image)")
 
         rqst_disks = set(kwargs['image_list'].split(','))
-        mapped_disks = set(config['clients'][client_iqn]['luns'].keys())
-        current_disks = set(config['disks'].keys())
+        mapped_disks = set(config['targets'][target_iqn]['clients'][client_iqn]['luns'].keys())
+        current_disks = set(config['targets'][target_iqn]['disks'].keys())
 
         if len(rqst_disks) > len(mapped_disks):
             # this is an add operation

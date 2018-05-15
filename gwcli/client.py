@@ -59,7 +59,7 @@ class Clients(UIGroup):
         > create <client_iqn>
 
         """
-        self.logger.debug("CMD: ../hosts/ create {}".format(client_iqn))
+        self.logger.debug("CMD: ../hosts/ create {}".format(self.parent.target_iqn, client_iqn))
         cli_seed = {"luns": {}, "auth": {}}
 
         # is the IQN usable?
@@ -68,6 +68,8 @@ class Clients(UIGroup):
                               "iSCSI".format(client_iqn))
             return
 
+        api_vars = {'target_iqn':self.parent.target_iqn}
+
         # Issue the API call to create the client
         client_api = ('{}://127.0.0.1:{}/api/'
                       'client/{}'.format(self.http_mode,
@@ -75,12 +77,12 @@ class Clients(UIGroup):
                                          client_iqn))
 
         self.logger.debug("Client CREATE for {}".format(client_iqn))
-        api = APIRequest(client_api)
+        api = APIRequest(client_api, data=api_vars)
         api.put()
 
         if api.response.status_code == 200:
             Client(self, client_iqn, cli_seed)
-            self.logger.debug("- Client '{}' added".format(client_iqn))
+            self.logger.debug("- Client '{}' added for {}".format(client_iqn, self.parent.target_iqn))
             self.logger.info('ok')
 
         else:
@@ -104,9 +106,9 @@ class Clients(UIGroup):
 
         """
 
-        self.logger.debug("CMD: ../hosts/ delete {}".format(client_iqn))
+        self.logger.debug("CMD: {}/hosts/ delete {}".format(self.parent.target_iqn, client_iqn))
 
-        self.logger.debug("Client DELETE for {}".format(client_iqn))
+        self.logger.debug("Client {} DELETE for {}".format(client_iqn, self.parent.target_iqn))
 
         # is the IQN usable?
         if not valid_iqn(client_iqn):
@@ -114,12 +116,14 @@ class Clients(UIGroup):
                               "iSCSI".format(client_iqn))
             return
 
+        api_vars = {'target_iqn':self.parent.target_iqn}
+
         client_api = ('{}://{}:{}/api/'
                       'client/{}'.format(self.http_mode,
                                          "127.0.0.1",
                                          settings.config.api_port,
                                          client_iqn))
-        api = APIRequest(client_api)
+        api = APIRequest(client_api, data=api_vars)
         api.delete()
 
         if api.response.status_code == 200:
@@ -233,7 +237,7 @@ class Client(UINode):
 
     def summary(self):
 
-        all_disks = self.parent.parent.parent.parent.disks.children
+        all_disks = self.parent.parent.disk_group.children
         total_bytes = 0
 
         client_luns = [lun.rbd_name for lun in self.children]
@@ -287,7 +291,7 @@ class Client(UINode):
 
         """
 
-        self.logger.debug("CMD: ../hosts/<client_iqn> auth *")
+        self.logger.debug("CMD: {}/hosts/{} auth *".format(self.parent.parent.target_iqn, self.client_iqn))
 
         if not chap:
             self.logger.error("To set or reset authentication, specify either "
@@ -309,7 +313,7 @@ class Client(UINode):
         self.logger.debug(
             "CHAP to be set to '{}' for '{}'".format(chap, self.client_iqn))
 
-        api_vars = {"chap": chap}
+        api_vars = {"target_iqn": self.parent.parent.target_iqn, "chap": chap}
 
         clientauth_api = ('{}://127.0.0.1:{}/api/'
                           'clientauth/{}'.format(self.http_mode,
@@ -361,8 +365,8 @@ class Client(UINode):
 
         """
 
-        self.logger.debug("CMD: ../hosts/<client_iqn> disk action={}"
-                          " disk={}".format(action,
+        self.logger.debug("CMD: {}/hosts/{} disk action={}"
+                          " disk={}".format(self.parent.parent.target_iqn, self.client_iqn, action,
                                            disk))
 
         valid_actions = ['add', 'remove']
@@ -383,9 +387,12 @@ class Client(UINode):
         if action == 'add':
 
             if disk not in current_luns:
-                ui_root = self.get_ui_root()
+                #ui_root = self.get_ui_root()
+                disk_root = self.parent.parent
                 valid_disk_names = [defined_disk.image_id
-                                    for defined_disk in ui_root.disks.children]
+                                    for defined_disk in disk_root.disk_group.children]
+                #valid_disk_names = [defined_disk.image_id
+                #                    for defined_disk in ui_root.disks.children]
             else:
                 # disk provided is already mapped, so remind the user
                 self.logger.error("Disk {} already mapped".format(disk))
@@ -399,8 +406,9 @@ class Client(UINode):
             # for the admin
 
             if action == 'add':
-                ui_root = self.get_ui_root()
-                ui_disks = ui_root.disks
+                #ui_root = self.get_ui_root()
+                #ui_disks = ui_root.disks
+                ui_disks = self.parent.parent.disk_group
                 if not size:
                     self.logger.error("To auto-define the disk to the client"
                                       " you must provide a disk size")
@@ -429,7 +437,7 @@ class Client(UINode):
                                       action,
                                       disk))
 
-        api_vars = {"disk": disk}
+        api_vars = {"target_iqn": self.parent.parent.target_iqn, "disk": disk}
 
         clientlun_api = ('{}://127.0.0.1:{}/api/'
                          'clientlun/{}'.format(self.http_mode,
@@ -451,7 +459,7 @@ class Client(UINode):
                 # The addition of the lun will get a lun id assigned so
                 # we need to query the api server to get the new configuration
                 # to be able to set the local cli entry correctly
-                get_api_vars = {"disk": disk}
+                get_api_vars = {"target_iqn": self.parent.parent.target_iqn, "disk": disk}
 
                 clientlun_api = clientlun_api.replace('/clientlun/',
                                                       '/_clientlun/')
@@ -551,8 +559,9 @@ class MappedLun(UINode):
         UINode.__init__(self, 'lun {}'.format(lun_id), parent)
 
         # navigate back through the object model to pick up the disks
-        ui_root = self.get_ui_root()
-        disk_lookup = ui_root.disks.disk_lookup
+#        ui_root = self.get_ui_root()
+#        disk_lookup = ui_root.disks.disk_lookup
+        disk_lookup = self.parent.parent.parent.disk_group.disk_lookup
 
         self.disk = disk_lookup[name]
         self.owner = self.disk.owner

@@ -171,8 +171,44 @@ def get_sys_info(query_type=None):
         # Request Unknown
         return jsonify(message="Unknown /sysinfo query"), 404
 
+def clear_config(target_iqn, gateway_group):
 
-@app.route('/api/target/<target_iqn>', methods=['PUT'])
+    # we need to process the gateways, leaving the local machine until
+    # last to ensure we don't fall foul of the api auth check
+    gw_list = [gw_name for gw_name in gateway_group
+               if isinstance(gateway_group[gw_name], dict)]
+
+    this_gw = this_host()
+    if this_gw not in gw_list:
+        logger.warning("Executor({}) must be in gateway list: "
+                          "{}".format(this_gw, gw_list))
+        return jsonify(message="Executor must be in gateway list"), 500
+
+    gw_list.remove(this_gw)
+    gw_list.append(this_gw)
+
+    http_mode = 'https' if settings.config.api_secure else 'http'
+
+    for gw_name in gw_list:
+
+        gw_api = ('{}://{}:{}/api/'
+                  '_gateway/{}'.format(http_mode,
+                                       gw_name,
+                                       settings.config.api_port,
+                                       gw_name))
+
+        gw_vars = {"target_iqn": target_iqn}
+        api = APIRequest(gw_api, data=gw_vars)
+        api.delete()
+        if api.response.status_code != 200:
+            logger.error("Delete of {} failed!".format(gw_name))
+            raise GatewayAPIError
+
+        else:
+            logger.debug("- deleted {}".format(gw_name))
+
+
+@app.route('/api/target/<target_iqn>', methods=['PUT', 'DELETE'])
 @requires_restricted_auth
 def target(target_iqn=None):
     """
@@ -182,7 +218,7 @@ def target(target_iqn=None):
     :param target_iqn: IQN of the target each gateway will use
     **RESTRICTED**
     Examples:
-    curl --insecure --user admin:admin -X PUT http://192.168.122.69:5000/api/target/iqn.2003-01.com.redhat.iscsi-gw0
+    curl --insecure --user admin:admin -d target_iqn=xxxx -X PUT http://192.168.122.69:5000/api/target/iqn.2003-01.com.redhat.iscsi-gw0
     """
     if request.method == 'PUT':
 
@@ -206,6 +242,25 @@ def target(target_iqn=None):
 
         config.refresh()
         return jsonify(message="Target defined successfully"), 200
+
+    elif request.method == 'DELETE':
+        current_config = config.config
+        current_disks = len(current_config['targets'][target_iqn]['disks'])
+        current_clients = len(current_config['targets'][target_iqn]['clients'])
+        if current_clients > 0 or current_disks > 0:
+            logger.error("Clients({}) and Disks({}) must be removed first"
+                              " before clearing the {} gateway"
+                              "configuration".format(current_clients,
+                                                     current_disks,
+                                                     target_iqn))
+            return jsonify(message="Failed to clear target".format(target_iqn)), 500
+
+        try:
+            clear_config(target_iqn, current_config['targets'][target_iqn]['gateways'])
+        except GatewayAPIError:
+            return jsonify(message="Delete {} gateways failed!".format(target_iqn)), 500
+        else:
+            return jsonify(message="Clear target success".format(target_iqn)), 200
 
     else:
         # return unrecognised request
@@ -235,11 +290,12 @@ def gateways():
     Return the gateway subsection of the config object to the caller
     **RESTRICTED**
     Examples:
-    curl --insecure --user admin:admin -X GET http://192.168.122.69:5000/api/gateways
+    curl --insecure --user -d traget_iqn=xxx admin:admin -X GET http://192.168.122.69:5000/api/gateways
     """
 
     if request.method == 'GET':
-        return jsonify(config.config['gateways']), 200
+        target_iqn = request.form.get('target_iqn')
+        return jsonify(config.config['targets'][target_iqn]['gateways']), 200
 
 
 @app.route('/api/gateway/<gateway_name>', methods=['PUT'])
@@ -248,6 +304,7 @@ def gateway(gateway_name=None):
     """
     Define iscsi gateway(s) across node(s), adding TPGs, disks and clients
     The call requires the following variables to be set;
+    :param target_iqn: (str) target iqn
     :param gateway_name: (str) gateway name
     :param ip_address: (str) ipv4 dotted quad for the address iSCSI should use
     :param nosync: (bool) whether to sync the LIO objects to the new gateway
@@ -256,7 +313,7 @@ def gateway(gateway_name=None):
            default: FALSE
     **RESTRICTED**
     Examples:
-    curl --insecure --user admin:admin -d ip_address=192.168.122.69 -X PUT http://192.168.122.69:5000/api/gateway/iscsi-gw0
+    curl --insecure --user admin:admin -d target_iqn=xxx -d ip_address=192.168.122.69 -X PUT http://192.168.122.69:5000/api/gateway/iscsi-gw0
     """
 
     # the definition of a gateway into an existing configuration can apply the
@@ -265,6 +322,7 @@ def gateway(gateway_name=None):
     # aim to make this synchronisation of the new gateway an async task
 
 
+    target_iqn = request.form.get('target_iqn')
     ip_address = request.form.get('ip_address')
     nosync = request.form.get('nosync', False)
     skipchecks = request.form.get('skipchecks', 'false')
@@ -279,7 +337,7 @@ def gateway(gateway_name=None):
         gateway_usable = 'ok'
     else:
         logger.info("gateway validation needed for {}".format(gateway_name))
-        gateway_usable = valid_gateway(gateway_name,
+        gateway_usable = valid_gateway(target_iqn, gateway_name,
                                        ip_address,
                                        current_config)
 
@@ -289,9 +347,8 @@ def gateway(gateway_name=None):
     resp_text = "Gateway added"  # Assume the best!
     http_mode = 'https' if settings.config.api_secure else 'http'
 
-    current_disks = config.config['disks']
-    current_clients = config.config['clients']
-    target_iqn = config.config['gateways'].get('iqn')
+    current_disks = config.config['targets'][target_iqn]['disks']
+    current_clients = config.config['targets'][target_iqn]['clients']
 
     total_objects = (len(current_disks.keys()) +
                      len(current_clients.keys()))
@@ -300,7 +357,7 @@ def gateway(gateway_name=None):
     if total_objects == 0:
         nosync = True
 
-    gateway_ip_list = config.config['gateways'].get('ip_list', [])
+    gateway_ip_list = config.config['targets'][target_iqn]['gateways'].get('ip_list', [])
 
     gateway_ip_list.append(ip_address)
 
@@ -468,11 +525,11 @@ def _gateway(gateway_name=None):
     **RESTRICTED**
     """
 
+    target_iqn = request.form.get('target_iqn')
+
     if request.method == 'GET':
-
-        if gateway_name in config.config['gateways']:
-
-            return jsonify(config.config['gateways'][gateway_name]), 200
+        if gateway_name in config.config['targets'][target_iqn]['gateways']:
+            return jsonify(config.config['targets'][target_iqn]['gateways'][gateway_name]), 200
         else:
             return jsonify(message="Gateway doesn't exist in the "
                                    "configuration"), 404
@@ -498,7 +555,7 @@ def _gateway(gateway_name=None):
 
         gateway.manage(target_mode)
         if gateway.error:
-            logger.error("manage({}) logic failed for {}".format(target_mode,
+            logger.error("manage({}) logic failed for{} {}".format(target_mode, target_iqn,
                                                                  gateway_name))
             return jsonify(message="Failed to create the gateway"), 500
 
@@ -516,7 +573,7 @@ def _gateway(gateway_name=None):
     else:
         # DELETE gateway request
         gateway = GWTarget(logger,
-                           config.config['gateways']['iqn'],
+                           target_iqn,
                            '')
         if gateway.error:
             return jsonify(message="Failed to connect to the gateway"), 500
@@ -544,15 +601,16 @@ def get_disks():
     :param config: (str) 'yes' to list the config info of all disks, default is 'no'
     **RESTRICTED**
     Examples:
-    curl --insecure --user admin:admin -d config=yes -X GET https://192.168.122.69:5000/api/disks
+    curl --insecure --user admin:admin -d target_iqn=xxx -d config=yes -X GET https://192.168.122.69:5000/api/disks
     """
 
     conf = request.form.get('config', 'no')
+    target_iqn = request.form.get('target_iqn')
     if conf.lower() == "yes":
-        disk_names = config.config['disks']
+        disk_names = config.config['targets'][target_iqn]['disks']
         response = {"disks": disk_names}
     else:
-        disk_names = config.config['disks'].keys()
+        disk_names = config.config['targets'][target_iqn]['disks'].keys()
         response = {"disks": disk_names}
 
     return jsonify(response), 200
@@ -577,9 +635,9 @@ def disk(image_id):
     :param owner: (str) the owner of the rbd image
     **RESTRICTED**
     Examples:
-    curl --insecure --user admin:admin -d mode=create -d size=1g -d pool=rbd -d count=5 -X PUT https://192.168.122.69:5000/api/disk/rbd.new2_
-    curl --insecure --user admin:admin -X GET https://192.168.122.69:5000/api/disk/rbd.new2_1
-    curl --insecure --user admin:admin -X DELETE https://192.168.122.69:5000/api/disk/rbd.new2_1
+    curl --insecure --user admin:admin -d target_iqn=xxx -d mode=create -d size=1g -d pool=rbd -d count=5 -X PUT https://192.168.122.69:5000/api/disk/rbd.new2_
+    curl --insecure --user admin:admin -d target_iqn=xxx -X GET https://192.168.122.69:5000/api/disk/rbd.new2_1
+    curl --insecure --user admin:admin -d targte_iqn=xxx -X DELETE https://192.168.122.69:5000/api/disk/rbd.new2_1
     """
 
     disk_regex = re.compile("[a-zA-Z0-9\-]+(\.)[a-zA-Z0-9\-]+")
@@ -591,10 +649,12 @@ def disk(image_id):
     local_gw = this_host()
     logger.debug("this host is {}".format(local_gw))
 
+    target_iqn = request.form.get('target_iqn')
+
     if request.method == 'GET':
 
-        if image_id in config.config['disks']:
-            return jsonify(config.config["disks"][image_id]), 200
+        if image_id in config.config['targets'][target_iqn]['disks']:
+            return jsonify(config.config['targets'][target_iqn]["disks"][image_id]), 200
 
         else:
             return jsonify(message="rbd image {} not "
@@ -602,8 +662,8 @@ def disk(image_id):
 
     # This is a create/resize operation, so first confirm the gateways
     # are in place (we need gateways to perform the lun masking tasks
-    gateways = [key for key in config.config['gateways']
-                if isinstance(config.config['gateways'][key], dict)]
+    gateways = [key for key in config.config['targets'][target_iqn]['gateways']
+                if isinstance(config.config['targets'][target_iqn]['gateways'][key], dict)]
     logger.debug("All gateways: {}".format(gateways))
 
     # Any disk operation needs at least 2 gateways to be present
@@ -627,7 +687,7 @@ def disk(image_id):
 
         pool, image_name = image_id.split('.')
 
-        disk_usable = valid_disk(pool=pool, image=image_name, size=size,
+        disk_usable = valid_disk(target_iqn=target_iqn, pool=pool, image=image_name, size=size,
                                  mode=mode, count=count)
         if disk_usable != 'ok':
             return jsonify(message=disk_usable), 400
@@ -641,7 +701,7 @@ def disk(image_id):
             image_name = image_id if count == '1' else "{}{}".format(image_id,
                                                                      sfx)
 
-            api_vars = {'pool': pool, 'size': size, 'owner': local_gw,
+            api_vars = {'target_iqn': target_iqn, 'pool': pool, 'size': size, 'owner': local_gw,
                         'mode': mode}
 
             resp_text, resp_code = call_api(gateways, '_disk',
@@ -659,13 +719,13 @@ def disk(image_id):
     else:
         # this is a DELETE request
         pool_name, image_name = image_id.split('.')
-        disk_usable = valid_disk(mode='delete', pool=pool_name,
+        disk_usable = valid_disk(target_iqn=target_iqn, mode='delete', pool=pool_name,
                                  image=image_name)
 
         if disk_usable != 'ok':
             return jsonify(message=disk_usable), 400
 
-        api_vars = {'purge_host': local_gw}
+        api_vars = {'purge_host': local_gw, 'target_iqn': target_iqn}
 
         # process other gateways first
         gateways.remove(local_gw)
@@ -692,10 +752,11 @@ def _disk(image_id):
     **RESTRICTED**
     """
 
+    target_iqn = request.form.get('target_iqn')
     if request.method == 'GET':
 
-        if image_id in config.config['disks']:
-            return jsonify(config.config["disks"][image_id]), 200
+        if image_id in config.config['targets'][target_iqn]['disks']:
+            return jsonify(config.config['targets'][target_iqn]["disks"][image_id]), 200
 
         else:
             return jsonify(message="rbd image {} not "
@@ -706,10 +767,11 @@ def _disk(image_id):
         # put('http://127.0.0.1:5000/api/disk/rbd.ansible3',data={'pool': 'rbd','size': '3G','owner':'ceph-1'})
 
         rqst_fields = set(request.form.keys())
-        if rqst_fields.issuperset(("pool", "size", "owner", "mode")):
+        if rqst_fields.issuperset(("target_iqn", "pool", "size", "owner", "mode")):
 
             image_name = str(image_id.split('.', 1)[1])
             lun = LUN(logger,
+                      str(request.form['target_iqn']),
                       str(request.form['pool']),
                       image_name,
                       str(request.form['size']),
@@ -719,7 +781,7 @@ def _disk(image_id):
                              " : {}".format(lun.error_msg))
                 return jsonify(message="Unable to establish LUN instance"), 500
 
-            if request.form['mode'] == 'create' and len(config.config['disks']) >= 256:
+            if request.form['mode'] == 'create' and len(config.config['targets'][target_iqn]['disks']) >= 256:
                 logger.error("LUN alloc problem - too many LUNs")
                 return jsonify(message="LUN allocation failure: too many LUNs"), 500
 
@@ -732,13 +794,13 @@ def _disk(image_id):
                 # new disk is allocated, so refresh the local config object
                 config.refresh()
 
-                iqn = config.config['gateways']['iqn']
-                ip_list = config.config['gateways']['ip_list']
+                #iqn = config.config['gateways']['iqn']
+                ip_list = config.config['targets'][target_iqn]['gateways']['ip_list']
 
                 # Add the mapping for the lun to ensure the block device is
                 # present on all TPG's
                 gateway = GWTarget(logger,
-                                   iqn,
+                                   target_iqn,
                                    ip_list)
 
                 gateway.manage('map')
@@ -769,6 +831,7 @@ def _disk(image_id):
         pool, image = image_id.split('.', 1)
 
         lun = LUN(logger,
+                  target_iqn,
                   pool,
                   image,
                   '0G',
@@ -805,10 +868,11 @@ def get_clients():
     restricted_auth wrapper
     **RESTRICTED**
     Examples:
-    curl --insecure --user admin:admin -X GET https://192.168.122.69:5000/api/clients
+    curl --insecure --user admin:admin -d target_iqn=xxx -X GET https://192.168.122.69:5000/api/clients
     """
 
-    client_list = config.config['clients'].keys()
+    target_iqn = request.form.get('target_iqn')
+    client_list = config.config['targets'][target_iqn]['clients'].keys()
     response = {"clients": client_list}
 
     return jsonify(response), 200
@@ -826,6 +890,7 @@ def _update_client(**kwargs):
         image_list = []
 
     client = GWClient(logger,
+                      kwargs['target_iqn'],
                       kwargs['client_iqn'],
                       image_list,
                       kwargs['chap'])
@@ -857,28 +922,30 @@ def clientauth(client_iqn):
             password is 12-16 chars long containing any alphanumeric in [0-9a-zA-Z] and '@' '-' '_'
     **RESTRICTED**
     Examples:
-    curl --insecure --user admin:admin -d chap='' -X PUT https://192.168.122.69:5000/api/clientauth/iqn.2017-08.org.ceph:iscsi-gw0
-    curl --insecure --user admin:admin -d chap=dmin1234/admin12345678 -X PUT https://192.168.122.69:5000/api/clientauth/iqn.2017-08.org.ceph:iscsi-gw0
+    curl --insecure --user admin:admin -d target_iqn=xxx -d chap='' -X PUT https://192.168.122.69:5000/api/clientauth/iqn.2017-08.org.ceph:iscsi-gw0
+    curl --insecure --user admin:admin -d target_iqn=xxx -d chap=dmin1234/admin12345678 -X PUT https://192.168.122.69:5000/api/clientauth/iqn.2017-08.org.ceph:iscsi-gw0
     """
 
     # http_mode = 'https' if settings.config.api_secure else 'http'
     local_gw = this_host()
     logger.debug("this host is {}".format(local_gw))
-    gateways = [key for key in config.config['gateways']
-                if isinstance(config.config['gateways'][key], dict)]
+    target_iqn = request.form.get('target_iqn')
+    gateways = [key for key in config.config['targets'][target_iqn]['gateways']
+                if isinstance(config.config['targets'][target_iqn]['gateways'][key], dict)]
     logger.debug("other gateways - {}".format(gateways))
     gateways.remove(local_gw)
 
-    lun_list = config.config['clients'][client_iqn]['luns'].keys()
+    lun_list = config.config['targets'][target_iqn]['clients'][client_iqn]['luns'].keys()
     image_list = ','.join(lun_list)
     chap = request.form.get('chap')
 
-    client_usable = valid_client(mode='auth', client_iqn=client_iqn, chap=chap)
+    client_usable = valid_client(target_iqn=target_iqn, mode='auth', client_iqn=client_iqn, chap=chap)
     if client_usable != 'ok':
         logger.error("BAD auth request from {}".format(request.remote_addr))
         return jsonify(message=client_usable), 400
 
-    api_vars = {"committing_host": local_gw,
+    api_vars = {"target_iqn": target_iqn,
+                "committing_host": local_gw,
                 "image_list": image_list,
                 "chap": chap}
 
@@ -905,9 +972,11 @@ def _clientauth(client_iqn):
     # PUT request to define/change authentication
     image_list = request.form['image_list']
     chap = request.form['chap']
+    target_iqn = request.form['target_iqn']
     committing_host = request.form['committing_host']
 
-    status_code, status_text = _update_client(client_iqn=client_iqn,
+    status_code, status_text = _update_client(target_iqn=target_iqn,
+                                              client_iqn=client_iqn,
                                               images=image_list,
                                               chap=chap,
                                               committing_host=committing_host)
@@ -924,21 +993,22 @@ def clientlun(client_iqn):
     :param disk: (str) rbd image name of the format pool.image
     **RESTRICTED**
     Examples:
-    curl --insecure --user admin:admin -d disk=rbd.new2_1 -X PUT https://192.168.122.69:5000/api/clientlun/iqn.2017-08.org.ceph:iscsi-gw0
+    curl --insecure --user admin:admin -d target_iqn=xxx -d disk=rbd.new2_1 -X PUT https://192.168.122.69:5000/api/clientlun/iqn.2017-08.org.ceph:iscsi-gw0
     """
 
     # http_mode = 'https' if settings.config.api_secure else 'http'
 
+    target_iqn = request.form.get('target_iqn')
     local_gw = this_host()
     logger.debug("this host is {}".format(local_gw))
-    gateways = [key for key in config.config['gateways']
-                if isinstance(config.config['gateways'][key], dict)]
+    gateways = [key for key in config.config['targets'][target_iqn]['gateways']
+                if isinstance(config.config['targets'][target_iqn]['gateways'][key], dict)]
     logger.debug("other gateways - {}".format(gateways))
     gateways.remove(local_gw)
 
     disk = request.form.get('disk')
 
-    lun_list = config.config['clients'][client_iqn]['luns'].keys()
+    lun_list = config.config['targets'][target_iqn]['clients'][client_iqn]['luns'].keys()
 
     if request.method == 'PUT':
         lun_list.append(disk)
@@ -949,11 +1019,11 @@ def clientlun(client_iqn):
         else:
             return jsonify(message="disk not mapped to client"), 400
 
-    chap_obj = CHAP(config.config['clients'][client_iqn]['auth']['chap'])
+    chap_obj = CHAP(config.config['targets'][target_iqn]['clients'][client_iqn]['auth']['chap'])
     chap = "{}/{}".format(chap_obj.user, chap_obj.password)
     image_list = ','.join(lun_list)
 
-    client_usable = valid_client(mode='disk', client_iqn=client_iqn,
+    client_usable = valid_client(target_iqn=target_iqn, mode='disk', client_iqn=client_iqn,
                                  image_list=image_list)
     if client_usable != 'ok':
         logger.error("Bad disk request for client {} : "
@@ -962,7 +1032,8 @@ def clientlun(client_iqn):
         return jsonify(message=client_usable), 400
 
     # committing host is the local LIO node
-    api_vars = {"committing_host": local_gw,
+    api_vars = {"target_iqn": target_iqn,
+                "committing_host": local_gw,
                 "image_list": image_list,
                 "chap": chap}
 
@@ -984,10 +1055,11 @@ def _clientlun(client_iqn):
     **RESTRICTED**
     """
 
+    target_iqn = request.form.get('target_iqn')
     if request.method == 'GET':
 
-        if client_iqn in config.config['clients']:
-            lun_config = config.config['clients'][client_iqn]['luns']
+        if client_iqn in config.config['targets'][target_iqn]['clients']:
+            lun_config = config.config['targets'][target_iqn]['clients'][client_iqn]['luns']
 
             return jsonify(message=lun_config), 200
         else:
@@ -1001,7 +1073,8 @@ def _clientlun(client_iqn):
         chap = request.form['chap']
         committing_host = request.form['committing_host']
 
-        status_code, status_text = _update_client(client_iqn=client_iqn,
+        status_code, status_text = _update_client(target_iqn=target_iqn,
+                                                  client_iqn=client_iqn,
                                                   images=image_list,
                                                   chap=chap,
                                                   committing_host=committing_host)
@@ -1017,26 +1090,27 @@ def client(client_iqn):
     :param client_iqn: (str) IQN of the client to create or delete
     **RESTRICTED**
     Examples:
-    curl --insecure --user admin:admin -X PUT https://192.168.122.69:5000/api/client/iqn.1994-05.com.redhat:myhost4
-    curl --insecure --user admin:admin -X DELETE https://192.168.122.69:5000/api/client/iqn.1994-05.com.redhat:myhost4
+    curl --insecure --user admin:admin -d target_iqn=xxx -X PUT https://192.168.122.69:5000/api/client/iqn.1994-05.com.redhat:myhost4
+    curl --insecure --user admin:admin -d target_iqn=xxx -X DELETE https://192.168.122.69:5000/api/client/iqn.1994-05.com.redhat:myhost4
     """
 
+    target_iqn = request.form.get('target_iqn')
     method = {"PUT": 'create',
               "DELETE": 'delete'}
 
     # http_mode = 'https' if settings.config.api_secure else 'http'
     local_gw = this_host()
     logger.debug("this host is {}".format(local_gw))
-    gateways = [key for key in config.config['gateways']
-                if isinstance(config.config['gateways'][key], dict)]
+    gateways = [key for key in config.config['targets'][target_iqn]['gateways']
+                if isinstance(config.config['targets'][target_iqn]['gateways'][key], dict)]
     logger.debug("other gateways - {}".format(gateways))
     gateways.remove(local_gw)
 
     # committing host is the node responsible for updating the config object
-    api_vars = {"committing_host": local_gw}
+    api_vars = {"committing_host": local_gw, "target_iqn": target_iqn}
 
     # validate the PUT/DELETE request first
-    client_usable = valid_client(mode=method[request.method],
+    client_usable = valid_client(target_iqn=target_iqn, mode=method[request.method],
                                  client_iqn=client_iqn)
     if client_usable != 'ok':
         return jsonify(message=client_usable), 400
@@ -1076,10 +1150,11 @@ def _client(client_iqn):
     **RESTRICTED**
     """
 
+    target_iqn = request.form['target_iqn']
     if request.method == 'GET':
 
-        if client_iqn in config.config['clients']:
-            return jsonify(config.config["clients"][client_iqn]), 200
+        if client_iqn in config.config['targets'][target_iqn]['clients']:
+            return jsonify(config.config['targets'][target_iqn]["clients"][client_iqn]), 200
         else:
             return jsonify(message="Client does not exist"), 404
 
@@ -1097,7 +1172,8 @@ def _client(client_iqn):
 
         chap = request.form.get('chap', '')
 
-        status_code, status_text = _update_client(client_iqn=client_iqn,
+        status_code, status_text = _update_client(target_iqn=target_iqn,
+                                                  client_iqn=client_iqn,
                                                   images=image_list,
                                                   chap=chap,
                                                   committing_host=committing_host)
@@ -1111,8 +1187,8 @@ def _client(client_iqn):
         committing_host = request.form['committing_host']
 
         # Make sure the delete request is for a client we have defined
-        if client_iqn in config.config['clients'].keys():
-            client = GWClient(logger, client_iqn, '', '')
+        if client_iqn in config.config['targets'][target_iqn]['clients'].keys():
+            client = GWClient(logger, target_iqn, client_iqn, '', '')
             client.manage('absent', committer=committing_host)
 
             if client.error:
@@ -1319,6 +1395,12 @@ def iscsi_active():
                 break
     return state
 
+@app.route('/api/available_ips', methods=['GET'])
+@requires_restricted_auth
+def get_available_ips():
+    if request.method == 'GET':
+
+        return jsonify(messsge="{}".format(settings.config.available_ip_list)), 200
 
 @app.route('/api/_ping', methods=['GET'])
 @requires_restricted_auth
@@ -1326,23 +1408,12 @@ def _ping():
     """
     Simple "is alive" ping responder.
     """
-
     if request.method == 'GET':
 
-        gw_config = config.config['gateways']
-        if this_host() in gw_config:
-            if iscsi_active():
-                rc = 200
-            else:
-                rc = 503
-        else:
-            # host is not yet defined, which means the port check would fail
-            # so just return a 200 OK back to the caller
-            rc = 200
+        rc = 200
 
         return jsonify(message='pong'), \
-               rc
-
+               rc 
 
 def target_ready(gateway_list):
     """
