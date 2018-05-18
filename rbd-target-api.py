@@ -12,6 +12,7 @@ import time
 import inspect
 import re
 import platform
+import socket
 
 from functools import wraps
 from rpm import labelCompare
@@ -1399,8 +1400,15 @@ def iscsi_active():
 @requires_restricted_auth
 def get_available_ips():
     if request.method == 'GET':
+        ip_hostname = []
+        available_ips = settings.config.available_ip_list
+        tmp_dict = {}
+        for ip in available_ips:
+            tmp_dict[ip] = socket.gethostbyaddr(ip)[0]
+            ip_hostname.append(tmp_dict)
+            tmp_dict = {}
 
-        return jsonify(messsge="{}".format(settings.config.available_ip_list)), 200
+        return jsonify(ip_hostname="{}".format(ip_hostname)), 200
 
 @app.route('/api/_ping', methods=['GET'])
 @requires_restricted_auth
