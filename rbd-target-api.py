@@ -1414,7 +1414,7 @@ def iscsi_active():
 def get_available_ips():
     if request.method == 'GET':
 
-        return jsonify(messsge="{}".format(settings.config.available_ip_list)), 200
+        return jsonify(message="{}".format(settings.config.available_ip_list)), 200
 
 @app.route('/api/_ping', methods=['GET'])
 @requires_restricted_auth
