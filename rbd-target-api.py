@@ -1414,16 +1414,15 @@ def iscsi_active():
 @requires_restricted_auth
 def get_available_ips():
     if request.method == 'GET':
-
-        ip_hostname = []
+        ip_hostname = {}
         available_ips = settings.config.available_ip_list
-        tmp_dict = {}
         for ip in available_ips:
-            tmp_dict[ip] = socket.gethostbyaddr(ip)[0]
-            ip_hostname.append(tmp_dict)
-            tmp_dict = {}
+            try:
+                ip_hostname[ip] = socket.gethostbyaddr(ip)[0]
+            except socket.herror:
+                ip_hostname[ip] = ''
 
-        return jsonify(ip_hostname="{}".format(ip_hostname)), 200
+        return jsonify(ip_hostname=ip_hostname), 200
 
 @app.route('/api/_ping', methods=['GET'])
 @requires_restricted_auth
