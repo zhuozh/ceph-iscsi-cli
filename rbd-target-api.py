@@ -184,9 +184,8 @@ def clear_config(target_iqn, gateway_group):
 
     this_gw = this_host()
     if this_gw not in gw_list:
-        logger.warning("Executor({}) must be in gateway list: "
-                          "{}".format(this_gw, gw_list))
-        return jsonify(message="Executor must be in gateway list"), 500
+        message = "Executor({}) must be in gateway list: {}".format(this_gw, gw_list)
+        raise Exception(message)
 
     gw_list.remove(this_gw)
     gw_list.append(this_gw)
@@ -263,6 +262,9 @@ def target(target_iqn=None):
             clear_config(target_iqn, current_config['targets'][target_iqn]['gateways'])
         except GatewayAPIError:
             return jsonify(message="Delete {} gateways failed!".format(target_iqn)), 500
+        except Exception as e:
+            logger.error(e.message)
+            return jsonify(message=e.message), 500
         else:
             return jsonify(message="Clear target success".format(target_iqn)), 200
 
