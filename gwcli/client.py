@@ -534,19 +534,27 @@ class Client(UINode):
     def logged_in(self):
 
         r = root.RTSRoot()
-        for sess in r.sessions:
-            if sess['parent_nodeacl'].node_wwn == self.client_iqn:
-                self.alias = sess.get('alias')
-                state = sess.get('state').upper()
-                ips = set()
-                if state == 'LOGGED_IN':
-                    for conn in sess.get('connections'):
-                        ips.add(conn.get('address'))
-                    self.ip_address = ','.join(list(ips))
-                else:
-                    self.ip_address = ''
+        for tgt in r.targets:
+            if tgt.wwn == self.parent.parent.target_iqn:
+                break
 
-                return state
+        for tpg in tgt.tpgs:
+            for acl in tpg.node_acls:
+                if acl.node_wwn == self.client_iqn:
+                    sess = acl.session
+
+                    if sess is not None:
+                        self.alias = sess.get('alias')
+                        state = sess.get('state').upper()
+                        ips = set()
+                        if state == 'LOGGED_IN':
+                            for conn in sess.get('connections'):
+                                ips.add(conn.get('address'))
+                            self.ip_address = ','.join(list(ips))
+                        else:
+                            self.ip_address = ''
+
+                        return state
         return ''
 
 
