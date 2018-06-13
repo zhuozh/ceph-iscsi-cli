@@ -363,6 +363,31 @@ def valid_credentials(credentials_str, auth_type='chap'):
         # insert mutual or any other credentials logic here!
         return True
 
+def client_logged_in(target_iqn, client_iqn):
+    r = root.RTSRoot()
+
+    for tgt in r.targets:
+        if tgt.wwn == target_iqn:
+            break
+
+    for tpg in tgt.tpgs:
+        for acl in tpg.node_acls:
+            if acl.node_wwn == client_iqn:
+                sess = acl.session
+
+                if sess is not None:
+                    alias = sess.get('alias')
+                    state = sess.get('state').upper()
+                    ips = set()
+                    if state == 'LOGGED_IN':
+                        for conn in sess.get('connections'):
+                            ips.add(conn.get('address'))
+                        ip_address = ','.join(list(ips))
+                    else:
+                        ip_address = ''
+
+                    return state
+    return ''
 
 def valid_client(**kwargs):
     """
@@ -429,12 +454,7 @@ def valid_client(**kwargs):
         # client to delete must not be logged in - we're just checking locally,
         # since *all* nodes are set up the same, and a client login request
         # would normally login to each gateway
-        lio_root = root.RTSRoot()
-        clients_logged_in = [session['parent_nodeacl'].node_wwn
-                             for session in lio_root.sessions
-                             if session['state'] == 'LOGGED_IN']
-
-        if client_iqn in clients_logged_in:
+        if client_logged_in(target_iqn, client_iqn):
             return ("Client '{}' is logged in - unable to delete until"
                     " it's logged out".format(client_iqn))
 
