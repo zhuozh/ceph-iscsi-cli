@@ -1,6 +1,6 @@
 Name:		ceph-iscsi-cli
 Version:	2.5
-Release:	3%{?dist}
+Release:	6%{?dist}
 Summary:	CLI configuration tool to manage multiple iSCSI gateways
 Group:		Applications/System
 License:	GPLv3
@@ -27,7 +27,7 @@ shell (based on configshell) and an API service called rbd-target-api.
 
 The CLI orchestrates iscsi configuration changes through the API service
 running on EACH gateway node. The API service uses the same configuration
-settings file '/etc/ceph/iscsi-gateway.cfg' as the rbd-target-gw service.
+settings file '/var/lib/ceph/etc/ceph/iscsi-gateway.cfg' as the rbd-target-gw service.
 
 You should ensure that the 'cfg' file is consistent across gateways for
 predictable behaviour.
@@ -67,6 +67,27 @@ install -m 0644 .%{_sysconfdir}/systemd/system/rbd-target-gw.service.d/dependenc
 %{_mandir}/man8/gwcli.8.gz
 
 %changelog
+* Tue Jun 12 2018 Zhuoyu Zhang <zhangzhuoyu@cmss.chinamobile.com> 2.5-6
+- utils: fix bug in clients_logged_in
+- raise exception when executor not in gateway list
+- fix bug in logged_in
+
+* Fri May 25 2018 Zhuoyu Zhang <zhangzhuoyu@cmss.chinamobile.com> 2.5-5
+- let get_available_ips return a dictionary of ip and hostname
+
+* Wed May 23 2018 Zhuoyu Zhang <zhangzhuoyu@cmss.chinamobile.com> 2.5-4
+- return hostname with available ip
+- fix spelling error messsge to message
+
+* Mon May 21 2018 Zhuoyu Zhang <zhangzhuoyu@cmss.chinamobile.com> 2.5-3
+- bump version to 2.5-3
+- fix snap shot bugs
+- for tianji
+- support multiple target
+- bypass version check
+- do not check gateway list in requires_restricted_auth
+- remove restricted on ONE iSCSI target
+
 * Mon Sep 04 2017 Paul Cuzner <pcuzner@redhat.com> 2.5-2
 - automatically check state of gateways every 5 seconds
 - hostgroup logic updated
@@ -87,7 +108,7 @@ install -m 0644 .%{_sysconfdir}/systemd/system/rbd-target-gw.service.d/dependenc
 - requested commands echo'd to the log file improving audit record
 - add gateways refresh command
 - fix: disk resize now changes all related entries in the tree
-- ceph clusters are populated automatically through presence in /etc/ceph
+- ceph clusters are populated automatically through presence in /var/lib/ceph/etc/ceph
 - added ceph cluster name to disk info output
 - 'ansible' mode exports decrypt chap passwords automatically
 - cli installation binds rbd-target-api to the unit state of rbd-target-gw
